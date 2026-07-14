@@ -18,6 +18,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import time
 import os
+import subprocess
+import platform
+import re
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -49,6 +52,32 @@ NAVEGADORES = [
 
 
 # ---------- Funciones de análisis ----------
+
+def hacer_ping(host):
+    """Hace un ping real (ICMP) al servidor, igual que escribir
+    'ping www.ejemplo.com' en la terminal. Regresa si respondió y
+    el tiempo en milisegundos (si se pudo leer del resultado)."""
+    try:
+        if platform.system() == "Windows":
+            comando = ["ping", "-n", "1", "-w", "3000", host]
+        else:
+            comando = ["ping", "-c", "1", "-W", "3", host]
+
+        resultado = subprocess.run(
+            comando, capture_output=True, text=True, timeout=5,
+            encoding="utf-8", errors="ignore"
+        )
+        respondio = resultado.returncode == 0
+
+        # Busca el tiempo en el texto de salida (funciona en español e inglés:
+        # "tiempo=15ms", "tiempo<1ms", "time=15ms")
+        coincidencia = re.search(r"(?:tiempo|time)[=<]\s*(\d+)", resultado.stdout, re.IGNORECASE)
+        tiempo_ms = coincidencia.group(1) if coincidencia else "N/A"
+
+        return respondio, tiempo_ms
+    except Exception:
+        return False, "N/A"
+
 
 def revisar_enlace(url):
     try:
@@ -164,6 +193,10 @@ class AuditorApp:
         self.boton_analizar = ttk.Button(marco_superior, text="Analizar", command=self.analizar)
         self.boton_analizar.pack(side="left", padx=10)
 
+        # Resultado del ping (ICMP) al servidor
+        self.etiqueta_ping = ttk.Label(root, text="", padding=(10, 0))
+        self.etiqueta_ping.pack(fill="x")
+
         # Resumen numérico
         self.etiqueta_resumen = ttk.Label(root, text="", padding=10, font=("Segoe UI", 10, "bold"))
         self.etiqueta_resumen.pack(fill="x")
@@ -232,12 +265,27 @@ class AuditorApp:
         self.tabla.delete(*self.tabla.get_children())
         self.tabla_nav.delete(*self.tabla_nav.get_children())
         self.etiqueta_resumen.config(text="")
+        self.etiqueta_ping.config(text="")
         self.etiqueta_estado.config(text="Analizando enlaces, espera un momento...")
         self.root.update()
 
         try:
             if not url.startswith("http"):
                 url = "https://" + url
+
+            # --- Ping (ICMP) al servidor ---
+            host = urlparse(url).hostname
+            self.etiqueta_estado.config(text=f"Haciendo ping a {host}...")
+            self.root.update()
+            ping_ok, ping_ms = hacer_ping(host)
+            if ping_ok:
+                self.etiqueta_ping.config(
+                    text=f"🟢 Ping a {host}: responde ({ping_ms} ms)")
+            else:
+                self.etiqueta_ping.config(
+                    text=f"🔴 Ping a {host}: no responde (puede que el servidor bloquee ping, "
+                         f"aunque el sitio sí cargue por HTTP)")
+            self.root.update()
 
             r = requests.get(url, headers=HEADERS, timeout=10)
             sopa = BeautifulSoup(r.text, "html.parser")
